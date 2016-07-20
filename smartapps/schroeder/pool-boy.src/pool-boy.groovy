@@ -39,12 +39,21 @@ preferences {
         input "tempSensor", "capability.temperatureMeasurement", title: "Temperature Sensor"
         input "lightSensor", "capability.illuminanceMeasurement", title: "Light Sensor"
         input "pumpEnergyUse", "capability.energyMeter", title: "Pump Feedback"
-        input "pumpFeedback", "capability.powerMeter", title: "Pump Feedback"
+        input "pumpFeedback", "capability.powerMeter", title: "Pump Feedback"       
         
         input "poolSize", "number", title: "Pool Size", defaultValue: "25000"
         input "concentration", "decimal", title: "Chlorine Concentration (%)", defaultValue: "12.5"
         input "electricRate", "decimal", title: "Electric Rage(\$/kWh)", defaultValue: "0.203"        
 	}
+    
+    section("Virtual Switches") {
+        input "pumpVSwitchOff", "capability.switch", title: "Pump Virtual Switch Off"
+        input "pumpVSwitchS1",  "capability.switch", title: "Pump Virtual Switch Speed 1"
+        input "pumpVSwitchS2",  "capability.switch", title: "Pump Virtual Switch Speed 2"
+        input "pumpVSwitchS3",  "capability.switch", title: "Pump Virtual Switch Speed 3"
+        input "pumpVSwitchQC",  "capability.switch", title: "Pump Virtual Switch QC"
+        input "pumpVSwitchA",   "capability.switch", title: "Pump Virtual Switch Auto"
+    }
     
     section("Send Notifications?") {
         input("recipients", "contact", title: "Send notifications to") {
@@ -52,6 +61,10 @@ preferences {
                 description: "Phone Number", required: false
         }
     }
+    
+    section ("Google Sheets script url key...") {
+		input "urlKey", "text", title: "URL key"
+	}
 }
 
 def installed() {
@@ -73,9 +86,17 @@ def updated() {
 def initialize() {
    
     subscribe(tempSensor, "temperatureMeasurement.temperature", temperatureHandler)
-    subscribe(poolController, "PoolPumpMode", poolPumpModeHandler)
+    subscribe(poolController, "PoolController", poolPumpModeHandler)
     subscribe(location, "sunset", sunsetHandler)
 	subscribe(location, "sunrise", sunriseHandler)
+    
+    subscribe(pumpVSwitchOff,"switch", virtualSwitchHandler)
+    subscribe(pumpVSwitchS1, "switch", virtualSwitchHandler)
+    subscribe(pumpVSwitchS2, "switch", virtualSwitchHandler)
+    subscribe(pumpVSwitchS3, "switch", virtualSwitchHandler)
+    subscribe(pumpVSwitchS4, "switch", virtualSwitchHandler)
+    subscribe(pumpVSwitchQC, "switch", virtualSwitchHandler)
+    subscribe(pumpVSwitchA,  "switch", virtualSwitchHandler)
     
     
     if (state.tempReadings == null) {
@@ -91,6 +112,10 @@ def initialize() {
     //Schedule updates
     //runEvery15Minutes(mainLoop)
     schedule("42 0/15 * * * ?", mainLoop)
+    
+    //This should be handled via events, but I can't make it work...
+    runEvery5Minutes(updateVirtualSwitches)
+    updateVirtualSwitches()
     
     //Scheduled Injection
     schedule(injectTime, chlorineInjectionHandler)
@@ -236,9 +261,71 @@ def temperatureHandler(evt) {
 	log.debug "temperatureHandler ${evt.name}"
 }
 
+def updateVirtualSwitches() {
+	
+    def pumpControlMode = poolController.currentState("PoolPumpControlMode").value
+    def pumpMode = poolController.currentState("PoolPumpMode").value
+    log.debug "updateVirtualSwitches ${pumpControlMode} ${pumpMode}"
+
+    if (pumpControlMode == "Auto")
+    {
+    	pumpVSwitchOff.off();
+        pumpVSwitchS1.off();
+        pumpVSwitchS2.off();
+        pumpVSwitchS3.off();
+        pumpVSwitchQC.off();
+        pumpVSwitchA.on();
+    }
+    else
+    {
+    	pumpVSwitchA.off();    	
+        switch (pumpMode) {
+     	case "off":                	
+        	pumpVSwitchOff.on();
+            pumpVSwitchS1.off();
+            pumpVSwitchS2.off();
+            pumpVSwitchS3.off();
+            pumpVSwitchQC.off();
+            break
+         case "speed1":	
+         	pumpVSwitchOff.off();
+            pumpVSwitchS1.on();
+            pumpVSwitchS2.off();
+            pumpVSwitchS3.off();
+            pumpVSwitchQC.off();
+            break
+         case "speed2": 
+         	pumpVSwitchOff.off();
+            pumpVSwitchS1.off();
+            pumpVSwitchS2.on();
+            pumpVSwitchS3.off();
+            pumpVSwitchQC.off();
+            break
+         case "speed3": 
+         	pumpVSwitchOff.off();
+            pumpVSwitchS1.off();
+            pumpVSwitchS2.off();
+            pumpVSwitchS3.on();
+            pumpVSwitchQC.off();
+            break
+         case "quickclean":
+         	pumpVSwitchOff.off();
+            pumpVSwitchS1.off();
+            pumpVSwitchS2.off();
+            pumpVSwitchS3.off();
+            pumpVSwitchQC.on();
+            break
+         default:
+            break    
+    	}
+    }
+}
+
 def poolPumpModeHandler(evt) {
-	log.debug "poolPumpModeHandler ${evt.name} ${evt.value}"
-    state.poolPumpMode = evt.value
+	log.debug "poolPumpModeHandler ${evt.name}"// ${evt.value}"
+    //state.poolPumpMode = evt.value
+    
+    
 }
 
 def sunsetHandler(evt) {
@@ -255,8 +342,41 @@ def sunriseHandler(evt) {
     state.luxReadings = []
 }
 
+def virtualSwitchHandler(evt) {
+	log.debug "virtualSwitchHandler ${evt.device} ${evt.value} ${evt.source}"      
+    def d = evt.device    
+    
+    if (evt.value == 'on') {
+        if (d.id == pumpVSwitchOff.id) {    	
+            poolController.setPoolPumpOff()
+            poolController.setPoolPumpControlModeManual()
+        }
+        else if (d.id == pumpVSwitchS1.id) {
+            poolController.setPoolPumpSpeed1()
+            poolController.setPoolPumpControlModeManual()
+        }
+        else if (d.id == pumpVSwitchS2.id) {
+            poolController.setPoolPumpSpeed2()
+            poolController.setPoolPumpControlModeManual()
+        }
+        else if (d.id == pumpVSwitchS3.id) {
+            poolController.setPoolPumpSpeed3()
+            poolController.setPoolPumpControlModeManual()
+        }
+        else if (d.id == pumpVSwitchQC.id) {
+            poolController.setPoolPumpQuickClean()
+            poolController.setPoolPumpControlModeManual()
+        }
+        else if (d.id == pumpVSwitchA.id) {
+            poolController.setPoolPumpControlModeAuto()
+        }
+    }
+    
+    updateVirtualSwitches()
+}
+
 def ReportDailyStatistics() {
-	def energy = pumpEnergyUse.currentEnergy
+	def energy = pumpEnergyUse.currentEnergyRaw
     log.debug "current energy: ${energy}"
     def lastReportedEnergy = state.lastReportedEnergy
     if (lastReportedEnergy == null) {
@@ -272,6 +392,8 @@ def ReportDailyStatistics() {
     def message = "PB Reports: AveTemp: ${String.format("%.1f F", state.avgTemp)} AveLux: ${String.format("%.1f", state.avgLux)} Energy Usage ${String.format("%.1f kWh", energyUsedToday)} (\$${energyCost.round(2)})"
     
     sendPoolNotification(message)
+    
+    sendDataToGoogle(state.avgTemp, state.avgLux, energyUsedToday, energyCost)
 }
     
 private def parseSchedule(String schedule) {
@@ -315,4 +437,25 @@ def chlorineInjectionHandler() {
 
         sendPoolNotification("Injecting ${String.format("%.2f", amountToAdd)} oz of CL by running pump for ${pumpTime}s")
     }
+}
+
+private sendDataToGoogle(avgTemp, avgLux, energyUsedToday, energyCost) {
+        
+	def url = "https://script.google.com/macros/s/AKfycbw44TI6IIhvY72900rXXSca8ie42wSuCzawYt0QKwbECp8pKIQs/exec?"
+    url += "Average Temp=${avgTemp}&"
+    url += "Average Lux=${avgLux}&"
+    url += "Energy=${energyUsedToday}&"
+    url += "Energy const=${energyCost}"
+    
+    log.debug "${url}"
+    
+	def putParams = [
+		uri: url]
+
+	httpGet(putParams) { response ->
+    	log.debug(response.status)
+		if (response.status != 200 ) {
+			log.debug "Google logging failed, status = ${response.status}"
+		}
+	}
 }
